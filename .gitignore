@@ -1,0 +1,14 @@
+# Environment variables (contains real API tokens - never commit this)
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# ADK local session storage
+backlot_ops_agent/.adk/
+
+# OS junk
+.DS_Store
+Thumbs.db
