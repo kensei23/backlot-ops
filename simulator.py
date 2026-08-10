@@ -10,11 +10,17 @@ process - leave it running while the agent is in use. Ctrl+C to stop.
 import os
 import time
 import random
+import msvcrt  # Windows-only: lets us check for a keypress without blocking
 import requests
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Set DISABLE_RANDOM_INCIDENTS=1 before running this to turn off the
+# random ~5%-per-tick incidents, leaving only manually triggered ones
+# (pressing 'i') - useful for predictable testing and demos.
+RANDOM_INCIDENTS_ENABLED = os.environ.get("DISABLE_RANDOM_INCIDENTS") != "1"
 
 METRICS_URL = os.environ["GRAFANA_METRICS_URL"].rstrip("/")
 METRICS_USERNAME = os.environ["GRAFANA_METRICS_USERNAME"]
@@ -104,13 +110,31 @@ def send_log(level: str, message: str):
         print(f"  [logs]    sent OK: {message}")
 
 
+def sleep_and_check_for_trigger(seconds: float):
+    """Sleep in small steps, checking for a keypress the whole time, so a
+    manually triggered incident takes effect almost immediately instead
+    of waiting for the next scheduled tick.
+    """
+    global incident_active, incident_ticks_remaining
+    end_time = time.time() + seconds
+    while time.time() < end_time:
+        if msvcrt.kbhit():
+            key = msvcrt.getch().decode(errors="ignore").lower()
+            if key == "i" and not incident_active:
+                incident_active = True
+                incident_ticks_remaining = random.randint(4, 7)
+                print("\n>>> Manually triggered incident <<<\n")
+                send_log("error", "Render node render01 reporting elevated job failures")
+        time.sleep(0.2)
+
+
 def tick():
     """One simulated moment in time: update state, decide if anything
     interesting happened, and push metrics and logs for it.
     """
     global incident_active, incident_ticks_remaining
 
-    if not incident_active and random.random() < 0.05:  # ~5% chance per tick
+    if RANDOM_INCIDENTS_ENABLED and not incident_active and random.random() < 0.05:  # ~5% chance per tick
         incident_active = True
         incident_ticks_remaining = random.randint(3, 6)
         send_log("error", "Render node render01 reporting elevated job failures")
@@ -126,6 +150,12 @@ def tick():
         incident_ticks_remaining -= 1
         if incident_ticks_remaining <= 0:
             incident_active = False
+            # Snap back to a clean baseline immediately rather than
+            # relying on slow gradual drift, which can take many minutes
+            # to fully settle if incidents happen close together.
+            state["cpu_percent"] = random.uniform(40, 55)
+            state["queue_depth"] = random.randint(2, 4)
+            state["encode_fps"] = random.uniform(55, 62)
             send_log("info", "Render farm metrics returning to normal range")
     else:
         state["cpu_percent"] += random.uniform(-3, 3)
@@ -147,6 +177,7 @@ if __name__ == "__main__":
     print("Backlot Ops - synthetic render farm starting up.")
     print(f"Pushing metrics to: {METRICS_PUSH_URL}")
     print(f"Pushing logs to:    {LOGS_URL}")
+    print("Press 'i' at any time to trigger an incident on demand.")
     print("Press Ctrl+C to stop.\n")
 
     while True:
@@ -155,4 +186,4 @@ if __name__ == "__main__":
             tick()
         except Exception as e:
             print(f"  [error] something went wrong this tick: {e}")
-        time.sleep(15)
+        sleep_and_check_for_trigger(15)

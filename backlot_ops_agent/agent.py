@@ -125,7 +125,15 @@ async def query_render_farm_logs(logql_expression: str) -> str:
     """
     return await _call_mcp_tool(
         "query_loki_logs",
-        {"datasourceUid": LOKI_DATASOURCE_UID, "logql": logql_expression},
+        {
+            "datasourceUid": LOKI_DATASOURCE_UID,
+            "logql": logql_expression,
+            # Without this, the tool defaults to searching the last hour,
+            # so a resolved incident's error logs stay visible and get
+            # reported as still-ongoing long after it actually cleared.
+            "startRfc3339": "now-3m",
+            "endRfc3339": "now",
+        },
     )
 
 
@@ -144,7 +152,9 @@ root_agent = Agent(
         "never use pipe filters like |~ or regex, they can cause errors. "
         "Use {job=\"render-farm\"} for all logs, "
         "{job=\"render-farm\", level=\"error\"} for just errors, or "
-        "{job=\"render-farm\", level=\"info\"} for just info messages.\n\n"
+        "{job=\"render-farm\", level=\"info\"} for just info messages. "
+        "This only searches the last few minutes, so an error you see "
+        "reflects the current situation, not old history.\n\n"
         "Explain results in plain, non-technical language."
     ),
     tools=[
