@@ -11,6 +11,7 @@ from mcp import StdioServerParameters
 
 from google.adk.agents import Agent
 from google.adk.tools import FunctionTool
+from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
 from google.genai import types as genai_types
 
@@ -137,6 +138,29 @@ async def query_render_farm_logs(logql_expression: str) -> str:
     )
 
 
+line_producer_agent = Agent(
+    model="gemini-2.5-flash",
+    name="line_producer_agent",
+    instruction=(
+        "You are a line producer at a media studio. You'll be given a "
+        "technical incident report about the render farm or encode "
+        "pipeline. Your job is business judgment, not more technical "
+        "diagnosis - you're deciding what this means for the production "
+        "schedule and who needs to know.\n\n"
+        "Respond with exactly two parts:\n"
+        "SEVERITY: one word - Low, Medium, High, or Critical.\n"
+        "MESSAGE: a short, professional 2-3 sentence message suitable "
+        "for sending to a production team, explaining the impact and "
+        "what you'd recommend (e.g. proceed as planned, monitor "
+        "closely, or delay delivery). Do not use technical jargon like "
+        "GPU, CPU, or API - write for a non-technical audience."
+    ),
+    generate_content_config=genai_types.GenerateContentConfig(
+        temperature=0.2,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+    ),
+)
+
 root_agent = Agent(
     model="gemini-2.5-flash",
     name="backlot_ops_agent",
@@ -155,11 +179,19 @@ root_agent = Agent(
         "{job=\"render-farm\", level=\"info\"} for just info messages. "
         "This only searches the last few minutes, so an error you see "
         "reflects the current situation, not old history.\n\n"
+        "If you find a genuine, current incident (not just a past one "
+        "that's already cleared), call the line_producer_agent tool "
+        "with a one-sentence summary of what's wrong, to get a severity "
+        "rating and a stakeholder message. Include the line producer's "
+        "severity and message in your final answer alongside your own "
+        "technical explanation. Don't call line_producer_agent if "
+        "everything is healthy.\n\n"
         "Explain results in plain, non-technical language."
     ),
     tools=[
         FunctionTool(query_render_farm_metric),
         FunctionTool(query_render_farm_logs),
+        AgentTool(agent=line_producer_agent),
     ],
     generate_content_config=genai_types.GenerateContentConfig(
         temperature=0.1,
