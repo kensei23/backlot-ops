@@ -9,6 +9,9 @@ __pycache__/
 # ADK local session storage
 backlot_ops_agent/.adk/
 
+# Generated audio from TTS - not source, shouldn't be committed
+*.wav
+
 # OS junk
 .DS_Store
 Thumbs.db
