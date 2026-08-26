@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backlot Ops</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --panel: #16181b;
+    --panel-border: #26292e;
+    --text-primary: #e8e9ea;
+    --text-secondary: #8b8f96;
+    --text-muted: #5a5e64;
+    --teal: #1d9e75;
+    --teal-dim: #0f6e56;
+    --amber: #ef9f27;
+    --amber-dim: #ba7517;
+    --mono: 'SF Mono', 'Consolas', 'Monaco', monospace;
+    --sans: -apple-system, 'Segoe UI', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    min-height: 100vh;
+    padding: 2.5rem 1.5rem;
+  }
+
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--panel-border);
+  }
+
+  .masthead h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+
+  .masthead .sub {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* --- Tally light: the signature element --- */
+  .beacon-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .tally {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+    transition: background 0.4s ease;
+  }
+
+  .tally.healthy {
+    background: var(--teal);
+    box-shadow: 0 0 12px 2px rgba(29, 158, 117, 0.5);
+  }
+
+  .tally.incident {
+    background: var(--amber);
+    box-shadow: 0 0 12px 2px rgba(239, 159, 39, 0.55);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  .beacon-text .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+
+  .beacon-text .state {
+    font-size: 17px;
+    font-weight: 600;
+  }
+
+  .beacon-text .state.healthy-text { color: var(--teal); }
+  .beacon-text .state.incident-text { color: var(--amber); }
+
+  .message-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  .last-check {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 0.75rem;
+  }
+
+  /* --- Control switch --- */
+  .control-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 2.5rem;
+  }
+
+  button.trigger {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--amber);
+    border: 1px solid var(--amber-dim);
+    border-radius: 6px;
+    padding: 0.6rem 1.1rem;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  button.trigger:hover { background: rgba(239, 159, 39, 0.08); }
+  button.trigger:active { transform: scale(0.98); }
+  button.trigger:disabled { opacity: 0.4; cursor: default; }
+
+  /* --- Incident log --- */
+  .log-header {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+
+  .log-entry {
+    border-left: 2px solid var(--amber-dim);
+    padding: 0.6rem 0 0.6rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .log-entry .ts {
+    font-family: var(--mono);
+    color: var(--text-muted);
+    font-size: 11px;
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  .log-entry .msg { color: var(--text-secondary); }
+
+  .log-empty {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 1rem 0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <h1>Backlot Ops</h1>
+    <span class="sub">render farm &amp; encode pipeline</span>
+  </div>
+
+  <div class="beacon-row">
+    <div class="tally" id="tally"></div>
+    <div class="beacon-text">
+      <div class="label">Status</div>
+      <div class="state" id="state-text">Connecting&hellip;</div>
+    </div>
+  </div>
+
+  <div class="message-panel">
+    <div id="message">Waiting for first check&hellip;</div>
+    <div class="last-check" id="last-check"></div>
+  </div>
+
+  <div class="control-row">
+    <button class="trigger" id="trigger-btn">Trigger test incident</button>
+  </div>
+
+  <div class="log-header">Incident log</div>
+  <div id="log"></div>
+
+</div>
+
+<script>
+async function fetchStatus() {
+  try {
+    const res = await fetch('/api/status', { cache: 'no-store' });
+    const data = await res.json();
+    render(data);
+  } catch (e) {
+    console.error('status fetch failed', e);
+  }
+}
+
+async function fetchHistory() {
+  try {
+    const res = await fetch('/api/history', { cache: 'no-store' });
+    const data = await res.json();
+    renderLog(data.alerts || []);
+  } catch (e) {
+    console.error('history fetch failed', e);
+  }
+}
+
+function render(data) {
+  const tally = document.getElementById('tally');
+  const stateText = document.getElementById('state-text');
+  const message = document.getElementById('message');
+  const lastCheck = document.getElementById('last-check');
+
+  tally.className = 'tally';
+  stateText.className = 'state';
+
+  if (data.status === 'healthy') {
+    tally.classList.add('healthy');
+    stateText.classList.add('healthy-text');
+    stateText.textContent = 'Healthy';
+  } else if (data.status === 'incident') {
+    tally.classList.add('incident');
+    stateText.classList.add('incident-text');
+    stateText.textContent = 'Incident';
+  } else {
+    stateText.textContent = data.status === 'starting' ? 'Starting up' : 'Checking';
+  }
+
+  message.textContent = data.message || 'No data yet.';
+  lastCheck.textContent = data.last_check ? 'Last checked: ' + data.last_check : '';
+}
+
+function renderLog(alerts) {
+  const log = document.getElementById('log');
+  if (!alerts.length) {
+    log.innerHTML = '<div class="log-empty">No incidents recorded yet.</div>';
+    return;
+  }
+  log.innerHTML = alerts.slice().reverse().map(function(a) {
+    return '<div class="log-entry"><span class="ts">' + a.timestamp + '</span>' +
+           '<span class="msg">' + a.message.replace(/</g, '&lt;') + '</span></div>';
+  }).join('');
+}
+
+document.getElementById('trigger-btn').addEventListener('click', async function() {
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Triggering\u2026';
+  try {
+    await fetch('/api/trigger-incident', { method: 'POST' });
+  } catch (e) {
+    console.error('trigger failed', e);
+  }
+  setTimeout(function() {
+    btn.disabled = false;
+    btn.textContent = 'Trigger test incident';
+  }, 5000);
+});
+
+fetchStatus();
+fetchHistory();
+setInterval(fetchStatus, 8000);
+setInterval(fetchHistory, 8000);
+</script>
+</body>
+</html>

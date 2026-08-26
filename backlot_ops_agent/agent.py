@@ -5,6 +5,8 @@ render farm and encode pipeline, built on Google ADK and Grafana Cloud.
 
 import os
 import shutil
+import asyncio
+import requests
 from dotenv import load_dotenv
 
 from mcp import StdioServerParameters
@@ -49,16 +51,9 @@ def _find_uvx() -> str:
 
 UVX_PATH = _find_uvx()
 
-# Connects to the open-source mcp-grafana server via uvx, using a service
-# account token rather than the hosted server's OAuth flow - simpler to
-# run headless and works after deployment, where there's no browser to
-# complete an OAuth login.
-#
-# Kept as an internal connection only, not passed directly into the
-# agent's tools list. Exposing Grafana's raw MCP tool schemas to Gemini
-# caused it to occasionally emit malformed, code-shaped pseudo tool calls
-# instead of real ones. Wrapping each tool in a plain Python function
-# below gives Gemini a simpler schema to work with instead.
+# Connects to mcp-grafana via uvx using a service account token.
+# We wrap the raw MCP tools in standard Python functions below to give Gemini 
+# a simpler schema and prevent it from hallucinating arguments.
 grafana_mcp = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
@@ -137,6 +132,32 @@ async def query_render_farm_logs(logql_expression: str) -> str:
         },
     )
 
+async def create_grafana_annotation(message: str) -> str:
+    """Create an annotation on the Grafana dashboard to mark an ongoing incident.
+    
+    Args:
+        message: A short, plain English description of the incident to display on the graph.
+    """
+    def _post_annotation():
+        url = f"{GRAFANA_STACK_URL.rstrip('/')}/api/annotations"
+        headers = {
+            "Authorization": f"Bearer {GRAFANA_SERVICE_ACCOUNT_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "text": f"🤖 Agent Alert: {message}",
+            "tags": ["render-farm", "incident"]
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        # Run the blocking requests call in a background thread so it doesn't freeze the async agent loop
+        await asyncio.to_thread(_post_annotation)
+        return "Successfully created Grafana annotation."
+    except Exception as e:
+        return f"Failed to create annotation: {e}"
 
 line_producer_agent = Agent(
     model="gemini-2.5-flash",
@@ -180,17 +201,18 @@ root_agent = Agent(
         "This only searches the last few minutes, so an error you see "
         "reflects the current situation, not old history.\n\n"
         "If you find a genuine, current incident (not just a past one "
-        "that's already cleared), call the line_producer_agent tool "
-        "with a one-sentence summary of what's wrong, to get a severity "
-        "rating and a stakeholder message. Include the line producer's "
-        "severity and message in your final answer alongside your own "
-        "technical explanation. Don't call line_producer_agent if "
+        "that's already cleared), you must do TWO things:\n"
+        "1. Call create_grafana_annotation with a short summary of the issue to mark the graph.\n"
+        "2. Call the line_producer_agent tool with a one-sentence summary to get a severity rating and stakeholder message.\n\n"
+        "Include the line producer's severity and message in your final answer alongside your own "
+        "technical explanation. Don't call line_producer_agent or create_grafana_annotation if "
         "everything is healthy.\n\n"
         "Explain results in plain, non-technical language."
     ),
     tools=[
         FunctionTool(query_render_farm_metric),
         FunctionTool(query_render_farm_logs),
+        FunctionTool(create_grafana_annotation),
         AgentTool(agent=line_producer_agent),
     ],
     generate_content_config=genai_types.GenerateContentConfig(
