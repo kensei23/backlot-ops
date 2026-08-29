@@ -16,6 +16,7 @@ import asyncio
 import os
 import random
 import time
+import re
 from datetime import datetime, timezone
 
 import requests
@@ -31,10 +32,29 @@ LOGS_URL = os.environ["GRAFANA_LOGS_URL"]
 LOGS_USERNAME = os.environ["GRAFANA_LOGS_USERNAME"]
 LOGS_API_KEY = os.environ["GRAFANA_LOGS_API_KEY"]
 METRICS_PUSH_URL = f"{METRICS_URL}/api/v1/push/influx/write"
+SEVERITY_RE = re.compile(r"SEVERITY:\s*(\w+)", re.IGNORECASE)
+MESSAGE_RE = re.compile(r"MESSAGE:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 CHECK_INTERVAL_SECONDS = 15
 MAX_HISTORY = 20
 
+def parse_incident_text(text: str) -> dict:
+    """Split the agent's raw incident text into a severity label, a short
+    technical summary, and the line producer's stakeholder-facing message,
+    so the frontend can render them as separate elements instead of one
+    unbroken paragraph.
+    """
+    severity_match = SEVERITY_RE.search(text)
+    message_match = MESSAGE_RE.search(text)
+
+    severity = severity_match.group(1).strip().title() if severity_match else "Unknown"
+    message = message_match.group(1).strip() if message_match else text.strip()
+
+    summary = text[:severity_match.start()].strip() if severity_match else ""
+    if summary.upper().startswith("INCIDENT:"):
+        summary = summary[len("INCIDENT:"):].strip()
+
+    return {"severity": severity, "summary": summary, "message": message}
 
 class AppState:
     """In-memory state shared between the background loops and the web dashboard.
@@ -45,6 +65,8 @@ class AppState:
     def __init__(self):
         self.status = "starting"
         self.last_message = ""
+        self.last_summary = ""
+        self.last_severity = None
         self.last_check = None
         self.alert_history = []
         self.force_incident_flag = False
@@ -52,14 +74,27 @@ class AppState:
     def request_incident(self):
         self.force_incident_flag = True
 
-    def record_check(self, status: str, message: str):
+    def record_check(self, status: str, raw_text: str):
         now = datetime.now(timezone.utc).isoformat()
         self.status = status
-        self.last_message = message
         self.last_check = now
+
         if status == "incident":
-            self.alert_history.append({"timestamp": now, "message": message})
+            parsed = parse_incident_text(raw_text)
+            self.last_severity = parsed["severity"]
+            self.last_summary = parsed["summary"]
+            self.last_message = parsed["message"]
+            self.alert_history.append({
+                "timestamp": now,
+                "severity": parsed["severity"],
+                "summary": parsed["summary"],
+                "message": parsed["message"],
+            })
             self.alert_history = self.alert_history[-MAX_HISTORY:]
+        else:
+            self.last_severity = None
+            self.last_summary = ""
+            self.last_message = raw_text
 
 
 state = AppState()

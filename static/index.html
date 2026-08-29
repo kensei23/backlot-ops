@@ -189,6 +189,55 @@
     color: var(--text-muted);
     padding: 1rem 0;
   }
+
+  .severity-row {
+  display: none;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.severity-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.severity-badge.sev-low {
+  color: var(--teal);
+  background: rgba(29, 158, 117, 0.12);
+  border-color: var(--teal-dim);
+}
+
+.severity-badge.sev-medium {
+  color: var(--amber);
+  background: rgba(239, 159, 39, 0.12);
+  border-color: var(--amber-dim);
+}
+
+.severity-badge.sev-high {
+  color: var(--amber);
+  background: rgba(239, 159, 39, 0.2);
+  border-color: var(--amber-dim);
+}
+
+.severity-badge.sev-critical {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.14);
+  border-color: #c23c3c;
+}
+
+.tech-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--panel-border);
+}
 </style>
 </head>
 <body>
@@ -208,9 +257,13 @@
   </div>
 
   <div class="message-panel">
+    <div class="severity-row" id="severity-row">
+      <span class="severity-badge" id="severity-badge"></span>
+    </div>
+    <div class="tech-summary" id="summary"></div>
     <div id="message">Waiting for first check&hellip;</div>
     <div class="last-check" id="last-check"></div>
-  </div>
+  </div>  
 
   <div class="control-row">
     <button class="trigger" id="trigger-btn">Trigger test incident</button>
@@ -245,6 +298,9 @@ async function fetchHistory() {
 function render(data) {
   const tally = document.getElementById('tally');
   const stateText = document.getElementById('state-text');
+  const severityRow = document.getElementById('severity-row');
+  const severityBadge = document.getElementById('severity-badge');
+  const summary = document.getElementById('summary');
   const message = document.getElementById('message');
   const lastCheck = document.getElementById('last-check');
 
@@ -263,6 +319,17 @@ function render(data) {
     stateText.textContent = data.status === 'starting' ? 'Starting up' : 'Checking';
   }
 
+  if (data.status === 'incident' && data.severity) {
+    severityRow.style.display = 'flex';
+    severityBadge.textContent = data.severity;
+    severityBadge.className = 'severity-badge sev-' + data.severity.toLowerCase();
+  } else {
+    severityRow.style.display = 'none';
+  }
+
+  summary.textContent = data.summary || '';
+  summary.style.display = data.summary ? 'block' : 'none';
+
   message.textContent = data.message || 'No data yet.';
   lastCheck.textContent = data.last_check ? 'Last checked: ' + data.last_check : '';
 }
@@ -274,8 +341,12 @@ function renderLog(alerts) {
     return;
   }
   log.innerHTML = alerts.slice().reverse().map(function(a) {
-    return '<div class="log-entry"><span class="ts">' + a.timestamp + '</span>' +
-           '<span class="msg">' + a.message.replace(/</g, '&lt;') + '</span></div>';
+    const sevBadge = a.severity
+      ? '<span class="severity-badge sev-' + a.severity.toLowerCase() + '">' + a.severity + '</span> '
+      : '';
+    const msg = (a.message || a.summary || '').replace(/</g, '&lt;');
+    return '<div class="log-entry"><span class="ts">' + a.timestamp + '</span>' + sevBadge +
+           '<span class="msg">' + msg + '</span></div>';
   }).join('');
 }
 

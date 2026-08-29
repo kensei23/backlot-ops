@@ -41,6 +41,8 @@ app = get_fast_api_app(
 async def get_status():
     return {
         "status": shared_state.state.status,
+        "severity": shared_state.state.last_severity,
+        "summary": shared_state.state.last_summary,
         "message": shared_state.state.last_message,
         "last_check": shared_state.state.last_check,
     }
