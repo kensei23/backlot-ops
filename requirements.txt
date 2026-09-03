@@ -7,3 +7,4 @@ mcp-grafana
 fastapi>=0.110.0
 uvicorn>=0.29.0
 uv>=0.4.0
+slowapi>=0.1.10
