@@ -12,6 +12,7 @@ Instead of forcing producers to decipher complex metrics, Backlot Ops actively m
 *   **Technical Agent (`root_agent`):** Proactively monitors the live Grafana dashboard using the Prometheus and Loki MCP tools. 
 *   **Line Producer Agent:** When the technical agent detects a spike, it consults the line producer agent to assess the business severity and generate a plain-English message for the production team.
 *   **Closed-Loop Feedback:** The agent automatically writes its findings back to the Grafana dashboard via the Annotations API, dropping a marker exactly where the incident occurred.
+*   * **Production Security Hardening:** Implemented dynamic CORS middleware and IP-based rate limiting to secure backend endpoints, restrict unauthorized cross-origin requests, and protect cloud resources from API abuse.
 
 ### 🔊 Experimental Features
 - **Gemini TTS Audio Generation (`tts.py`)**: Explored using Gemini's native audio generation capabilities (`gemini-3.1-flash-tts-preview`) to convert Line Producer stakeholder alerts into spoken `.wav` files for accessibility. (Note: Kept as an experimental module for future integration).
