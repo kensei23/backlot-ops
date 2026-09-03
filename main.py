@@ -9,17 +9,19 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 import asyncio
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from google.adk.cli.fast_api import get_fast_api_app
 
 import shared_state
 
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,6 +31,7 @@ async def lifespan(app: FastAPI):
     sim_task.cancel()
     mon_task.cancel()
 
+limiter = Limiter(key_func=get_remote_address)
 
 app = get_fast_api_app(
     agents_dir=".",
@@ -36,6 +39,8 @@ app = get_fast_api_app(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.get("/api/status")
 async def get_status():
@@ -54,7 +59,8 @@ async def get_history():
 
 
 @app.post("/api/trigger-incident")
-async def trigger_incident():
+@limiter.limit("3/minute")
+async def trigger_incident(request: Request):
     shared_state.state.request_incident()
     return {"triggered": True}
 
