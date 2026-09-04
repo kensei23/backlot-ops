@@ -35,7 +35,7 @@ METRICS_PUSH_URL = f"{METRICS_URL}/api/v1/push/influx/write"
 SEVERITY_RE = re.compile(r"SEVERITY:\s*(\w+)", re.IGNORECASE)
 MESSAGE_RE = re.compile(r"MESSAGE:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
-CHECK_INTERVAL_SECONDS = 15
+CHECK_INTERVAL_SECONDS = 180
 MAX_HISTORY = 20
 
 def parse_incident_text(text: str) -> dict:
@@ -98,6 +98,7 @@ class AppState:
 
 
 state = AppState()
+agent_lock = asyncio.Lock()
 
 # --- Simulator state (ported from simulator.py) ---
 sim_data = {
@@ -177,6 +178,94 @@ def _simulator_tick():
     sim_data["active_jobs"] = max(0, sim_data["queue_depth"] // 2 + random.randint(3, 6))
     _send_metrics()
 
+async def handle_webhook_alert(alert_payload: dict):
+    alerts = alert_payload.get("alerts", [])
+    if not alerts:
+        print("[webhook] received payload with no alerts, ignoring")
+        return
+
+    firing = [a for a in alerts if a.get("status") == "firing"]
+    resolved = [a for a in alerts if a.get("status") == "resolved"]
+
+    if not firing and resolved:
+        print(f"[webhook] {len(resolved)} alert(s) resolved, checking if we should clear status")
+        # Only flip back to healthy if we're not currently mid-incident from
+        # a different, still-active cause - a fresh real check is safer than
+        # blindly trusting one resolved alert when other conditions might
+        # still be firing.
+        try:
+            async with agent_lock:
+                runner = InMemoryRunner(agent=root_agent)
+                session = await runner.session_service.create_session(app_name=runner.app_name, user_id="webhook-resolve")
+                message = genai_types.Content(role="user", parts=[genai_types.Part(text=CHECK_PROMPT)])
+                final_text = ""
+                async for event in runner.run_async(user_id="webhook-resolve", session_id=session.id, new_message=message):
+                    if event.is_final_response() and event.content and event.content.parts:
+                        final_text = event.content.parts[0].text or ""
+            final_text = final_text.strip()
+            final_text_upper = final_text.upper()
+            if "INCIDENT:" in final_text_upper or "SEVERITY:" in final_text_upper:
+                print("[webhook] resolved alert, but agent still finds an active incident - not clearing")
+                state.record_check("incident", final_text)
+            else:
+                print("[webhook] confirmed clear, marking healthy")
+                state.record_check("healthy", final_text)
+        except Exception as e:
+            print(f"[webhook] error re-checking after resolve: {e}")
+        return
+
+    if not firing:
+        print("[webhook] no firing alerts in payload, ignoring")
+        return
+
+    print(f"[webhook] investigating {len(firing)} firing alert(s)")
+
+    try:
+        summaries = []
+        for a in firing:
+            name = a.get("labels", {}).get("alertname", "Unknown alert")
+            summary = a.get("annotations", {}).get("summary", "")
+            values = a.get("values", {})
+            summaries.append(f"{name}: {summary} (values: {values})")
+
+        alert_context = "\n".join(summaries)
+
+        webhook_prompt = (
+            "Grafana has just fired the following alert(s):\n\n"
+            f"{alert_context}\n\n"
+            "Investigate the render farm's current metrics and recent logs to "
+            "confirm what's happening. Use these exact criteria: CPU usage "
+            "above 80%, or any ERROR level log entries in the last few minutes, "
+            "count as a genuine incident. Queue depth alone does not. If, after "
+            "investigating, you find no genuine incident by these criteria, "
+            "reply with only the single word HEALTHY. Otherwise, start your "
+            "reply with INCIDENT: followed by a 2-3 sentence plain English "
+            "explanation of what's wrong and likely why."
+        )
+
+        print("[webhook] waiting for agent lock...")
+        async with agent_lock:
+            print("[webhook] lock acquired, calling agent...")
+            runner = InMemoryRunner(agent=root_agent)
+            session = await runner.session_service.create_session(app_name=runner.app_name, user_id="webhook")
+            message = genai_types.Content(role="user", parts=[genai_types.Part(text=webhook_prompt)])
+
+            final_text = ""
+            async for event in runner.run_async(user_id="webhook", session_id=session.id, new_message=message):
+                if event.is_final_response() and event.content and event.content.parts:
+                    final_text = event.content.parts[0].text or ""
+            final_text = final_text.strip()
+
+        print(f"[webhook] Agent replied: {final_text}")
+
+        final_text_upper = final_text.upper()
+        if "INCIDENT:" in final_text_upper or "SEVERITY:" in final_text_upper:
+            state.record_check("incident", final_text)
+        else:
+            state.record_check("healthy", final_text)
+
+    except Exception as e:
+        print(f"[webhook] error during investigation: {e}")
 
 async def run_simulator_loop():
     while True:
@@ -190,22 +279,32 @@ async def run_simulator_loop():
 # --- Monitor loop (ported from monitor.py) ---
 CHECK_PROMPT = (
     "Check the render farm's current CPU usage, queue depth, and recent "
-    "logs for errors. If everything looks normal, reply with only the "
-    "single word HEALTHY and nothing else. If you find a real problem, "
-    "start your reply with INCIDENT: followed by a 2-3 sentence plain "
-    "English explanation of what's wrong and likely why."
+    "logs for errors.\n\n"
+    "Use these exact criteria to decide if this is an incident:\n"
+    "- CPU usage above 80% counts as an incident.\n"
+    "- Any ERROR level log entries in the last few minutes count as an incident.\n"
+    "- Queue depth alone, regardless of the number, is NOT an incident - "
+    "jobs waiting in a queue is normal operation, not a problem.\n"
+    "- Moderate CPU usage (below 90%) with no error logs is healthy, "
+    "even if it seems busy.\n\n"
+    "If none of the incident criteria above are met, reply with only the "
+    "single word HEALTHY and nothing else - do not add commentary or "
+    "caveats.\n\n"
+    "If any incident criterion IS met, start your reply with INCIDENT: "
+    "followed by a 2-3 sentence plain English explanation of what's "
+    "wrong and likely why."
 )
 
 
 async def _check_once(runner: InMemoryRunner) -> str:
-    session = await runner.session_service.create_session(app_name=runner.app_name, user_id="monitor")
-    message = genai_types.Content(role="user", parts=[genai_types.Part(text=CHECK_PROMPT)])
-    final_text = ""
-    async for event in runner.run_async(user_id="monitor", session_id=session.id, new_message=message):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text or ""
-    return final_text.strip()
-
+    async with agent_lock:
+        session = await runner.session_service.create_session(app_name=runner.app_name, user_id="monitor")
+        message = genai_types.Content(role="user", parts=[genai_types.Part(text=CHECK_PROMPT)])
+        final_text = ""
+        async for event in runner.run_async(user_id="monitor", session_id=session.id, new_message=message):
+            if event.is_final_response() and event.content and event.content.parts:
+                final_text = event.content.parts[0].text or ""
+        return final_text.strip()
 
 async def run_monitor_loop():
     runner = InMemoryRunner(agent=root_agent)
@@ -214,7 +313,7 @@ async def run_monitor_loop():
     # seconds to initialize. We ping it a few times to ensure the pipe is open 
     # before starting the real monitoring cycle.
     warm_up_succeeded = False
-    for attempt in range(1, 6):
+    for attempt in range(1, 9):
         try:
             result = await _check_once(runner)
             result_lower = result.lower()
@@ -233,7 +332,7 @@ async def run_monitor_loop():
             await asyncio.sleep(5)
 
     if not warm_up_succeeded:
-        print("[monitor] warm-up never succeeded after 5 attempts, continuing anyway")
+        print("[monitor] warm-up never succeeded after 8 attempts, continuing anyway")
 
     while True:
         try:
@@ -244,10 +343,16 @@ async def run_monitor_loop():
             continue
 
         print(f"\n[monitor] Agent replied: {result}\n")
-        
-        if "INCIDENT" in result.upper():
-            state.record_check("incident", result)
+
+        result_lower = result.lower()
+        if "unable to retrieve" in result_lower or "issue connecting" in result_lower or "can't see" in result_lower:
+            print("[monitor] transient connectivity issue, treating as non-incident")
+            state.record_check("connectivity_issue", result)
         else:
-            state.record_check("healthy", result)
+            result_upper = result.upper()
+            if "INCIDENT:" in result_upper or "SEVERITY:" in result_upper:
+                state.record_check("incident", result)
+            else:
+                state.record_check("healthy", result)
 
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)

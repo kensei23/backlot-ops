@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 import asyncio
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
     yield
     sim_task.cancel()
     mon_task.cancel()
+
+GRAFANA_WEBHOOK_SECRET = os.environ.get("GRAFANA_WEBHOOK_SECRET")
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -76,6 +78,14 @@ async def trigger_incident(request: Request):
     shared_state.state.request_incident()
     return {"triggered": True}
 
+background_tasks = set()
+@app.post("/api/grafana-webhook")
+async def grafana_webhook(request: Request):
+    payload = await request.json()
+    task = asyncio.create_task(shared_state.handle_webhook_alert(payload))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+    return {"received": True}
 
 # Dashboard frontend - mounted last so it doesn't shadow the API routes
 # above or ADK's own agent routes.
